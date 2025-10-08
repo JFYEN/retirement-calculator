@@ -4,7 +4,7 @@
 
 import { useState, useMemo } from "react";
 // 修正路徑：從 app/retire/ 往上兩層到 /lib
-import { useRetirementCalculator, BRAND } from "../../lib/useRetirementCalculator"; 
+import { useRetirementCalculator, BRAND, CalculatorInputs } from "../../lib/useRetirementCalculator"; 
 // 修正路徑：從 app/retire/ 往上兩層到 /lib，假設 supabaseClient.ts 導出 { supabase }
 import { supabase } from "../../lib/supabaseClient"; 
 // 修正路徑：從 app/retire/ 往上到 /components
@@ -14,15 +14,6 @@ import { CalculatorFields } from "../components/CalculatorFields";
 // 介面與預設值
 // =================================================================
 
-interface CalculatorInputs {
-    age: string; retireAge: string; lifeExp: string;
-    monthlyExpense: string; monthlySaving: string; postFixedIncome: string;
-    cash: string; invest: string; realEstate: string;
-    mortgageBalance: string; mortgageAprPct: string; mortgageYearsLeft: string;
-    rPrePct: string; rPostPct: string; inflationPct: string; reAppPct: string; medicalLateBoostPct: string;
-    reMode: "keep" | "sell" | "rent"; sellCostRatePct: string; rentNetMonthly: string; saleAge: string;
-    mode: "real" | "nominal";
-}
 
 export const defaultInputs: CalculatorInputs = {
     age: "", retireAge: "", lifeExp: "",
@@ -63,7 +54,6 @@ const ResultBox = ({ title, value, className = 'bg-white', valueClass = 'text-gr
 
 export default function RetirePage() {
     const [inputs, setInputs] = useState<CalculatorInputs>(defaultInputs);
-    const [newPlanTitle, setNewPlanTitle] = useState("我的退休試算 " + new Date().toLocaleDateString()); 
 
     // 儲存試算相關狀態
     const [showSaveModal, setShowSaveModal] = useState(false);
@@ -81,7 +71,7 @@ export default function RetirePage() {
     const outputs = useRetirementCalculator(inputs);
     
     // 從 outputs 解構必要的屬性
-    const { fmt, errorMessage, needForDisplay, assetsForDisplay, gap, coverage, yearsCovered } = outputs; 
+    const { fmt, needForDisplay, assetsForDisplay, gap, coverage, yearsCovered } = outputs; 
     
     // 處理輸入變化
     const handleInputChange = (field: keyof CalculatorInputs, value: string) => {
@@ -91,9 +81,8 @@ export default function RetirePage() {
     const inputProps = useMemo(() => ({
         inputs,
         handleInputChange,
-        outputs, 
-        fmt: fmt, 
-    }), [inputs, outputs, fmt]);
+        outputs,
+    }), [inputs, outputs]);
 
     // 儲存試算處理函數
     const handleSavePlan = async () => {
@@ -184,11 +173,6 @@ export default function RetirePage() {
         } finally {
             setLoading(false);
         }
-    };
-
-
-    const handleLoadButtonClick = () => {
-        alert('載入功能暫時未啟用，請直接使用預設值或自行修改。');
     };
 
     // 計算退休前年數 (用於儲蓄建議)

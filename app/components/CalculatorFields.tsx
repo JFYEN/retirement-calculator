@@ -1,6 +1,6 @@
 import React from "react";
 // 修正路徑
-import { CalculatorOutputs } from "../../lib/useRetirementCalculator"; 
+import { CalculatorOutputs, CalculatorInputs } from "../../lib/useRetirementCalculator"; 
 import { supabase } from "@/lib/supabaseClient";
 
 // ----------------------------------------------------------------------
@@ -13,10 +13,9 @@ interface SegmentProps { label: string; value: string; onChange: (v: string) => 
 interface InputFieldProps { label: string; value: string; onChange: (v: string) => void; placeholder?: string; }
 
 interface CalculatorProps {
-    inputs: any;
-    handleInputChange: (field: string, value: string) => void;
+    inputs: CalculatorInputs;
+    handleInputChange: (field: keyof CalculatorInputs, value: string) => void;
     outputs: CalculatorOutputs; // 確保是非 undefined 的物件
-    fmt: (num: number) => string; 
 }
 
 // ----------------------------------------------------------------------
@@ -161,7 +160,7 @@ export function Select({ label, value, onChange, options }: SegmentProps) {
 // Main Component (主元件)
 // ----------------------------------------------------------------------
 
-export function CalculatorFields({ inputs, handleInputChange, outputs, fmt }: CalculatorProps) {
+export function CalculatorFields({ inputs, handleInputChange, outputs }: CalculatorProps) {
     
     const reModeOptions = [
         { label: "保留", value: "keep" },
@@ -171,7 +170,7 @@ export function CalculatorFields({ inputs, handleInputChange, outputs, fmt }: Ca
     
     // 輔助函數：處理非金額欄位輸入
     const handleNumChange = (field: string, value: string) => {
-        handleInputChange(field as any, value);
+        handleInputChange(field as keyof CalculatorInputs, value);
     };
 
     // 🎯 友善提示與錯誤判斷
