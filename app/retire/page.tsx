@@ -1,540 +1,404 @@
+// app/retire/page.tsx (最終修正 JSX 編譯錯誤 V2)
+
 "use client";
-import { useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 
-/** 外觀 */
-const BRAND = { from: "from-emerald-600", to: "to-teal-500", bg: "bg-emerald-600" };
+import { useState, useMemo } from "react";
+// 修正路徑：從 app/retire/ 往上兩層到 /lib
+import { useRetirementCalculator, BRAND } from "../../lib/useRetirementCalculator"; 
+// 修正路徑：從 app/retire/ 往上兩層到 /lib，假設 supabaseClient.ts 導出 { supabase }
+import { supabase } from "../../lib/supabaseClient"; 
+// 修正路徑：從 app/retire/ 往上到 /components
+import { CalculatorFields } from "../components/CalculatorFields"; 
 
-/** 小工具 */
-const fmt = (n: number) => Math.round(n).toLocaleString();
-const toNumber = (s: string) => (s ? Number(s.replaceAll(",", "")) || 0 : 0);
-const toRate = (s: string) => (s ? Number(s) / 100 : 0);
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+// =================================================================
+// 介面與預設值
+// =================================================================
 
-/** 年金現值 */
-function annuityPV(annual: number, r: number, years: number) {
-  if (years <= 0 || annual <= 0) return 0;
-  if (Math.abs(r) < 1e-9) return annual * years;
-  return (annual * (1 - Math.pow(1 + r, -years))) / r;
-}
-/** 年金終值（月繳） */
-function annuityFV_monthly(monthly: number, rAnnual: number, months: number) {
-  if (months <= 0 || monthly <= 0) return 0;
-  const rm = rAnnual / 12;
-  if (Math.abs(rm) < 1e-9) return monthly * months;
-  return (monthly * (Math.pow(1 + rm, months) - 1)) / rm;
+interface CalculatorInputs {
+    age: string; retireAge: string; lifeExp: string;
+    monthlyExpense: string; monthlySaving: string; postFixedIncome: string;
+    cash: string; invest: string; realEstate: string;
+    mortgageBalance: string; mortgageAprPct: string; mortgageYearsLeft: string;
+    rPrePct: string; rPostPct: string; inflationPct: string; reAppPct: string; medicalLateBoostPct: string;
+    reMode: "keep" | "sell" | "rent"; sellCostRatePct: string; rentNetMonthly: string; saleAge: string;
+    mode: "real" | "nominal";
 }
 
-export default function Page() {
-  /** —— 基本資料 —— */
-  const [age, setAge] = useState("");
-  const [retireAge, setRetireAge] = useState("");
-  const [lifeExp, setLifeExp] = useState("");
-  const [monthlyExpense, setMonthlyExpense] = useState("");
-  const [monthlySaving, setMonthlySaving] = useState("");
-  const [postFixedIncome, setPostFixedIncome] = useState("");
+export const defaultInputs: CalculatorInputs = {
+    age: "", retireAge: "", lifeExp: "",
+    monthlyExpense: "", monthlySaving: "", postFixedIncome: "", 
+    cash: "", invest: "", realEstate: "",
+    mortgageBalance: "", mortgageAprPct: "", mortgageYearsLeft: "",
+    rPrePct: "", rPostPct: "", inflationPct: "", 
+    reAppPct: "", medicalLateBoostPct: "",
+    reMode: "keep", 
+    sellCostRatePct: "", 
+    rentNetMonthly: "", 
+    saleAge: "",
+    mode: "real",
+};
 
-  /** —— 資產 —— */
-  const [cash, setCash] = useState("");
-  const [invest, setInvest] = useState("");
-  const [realEstate, setRealEstate] = useState("");
+// =================================================================
+// 輔助組件 (ResultBox - 用於顯示 Kpi)
+// =================================================================
 
-  /** —— 房貸 —— */
-  const [mortgageBalance, setMortgageBalance] = useState("");    // 房貸目前餘額 (NTD)
-  const [mortgageAprPct, setMortgageAprPct] = useState("");      // 年利率 (%)
-  const [mortgageYearsLeft, setMortgageYearsLeft] = useState(""); // 剩餘年期 (年)
+interface ResultBoxProps {
+    title: string;
+    value: string;
+    className?: string;
+    valueClass?: string;
+}
 
-  /** —— 進階設定 —— */
-  const [rPrePct, setRPrePct] = useState("");
-  const [rPostPct, setRPostPct] = useState("");
-  const [inflationPct, setInflationPct] = useState("");
-  const [reAppPct, setReAppPct] = useState("");
-  const [medicalLateBoostPct, setMedicalLateBoostPct] = useState("");
+const ResultBox = ({ title, value, className = 'bg-white', valueClass = 'text-gray-800' }: ResultBoxProps) => (
+    <div className={`p-4 rounded-lg shadow-md border border-gray-100 flex flex-col items-center justify-center ${className}`}>
+        <p className="text-sm text-gray-500 mb-1">{title}</p>
+        <p className={`text-xl font-extrabold ${valueClass} break-all text-center`}>{value}</p>
+    </div>
+);
 
-  const [reMode, setReMode] = useState<"keep" | "sell" | "rent">("keep");
-  const [sellCostRatePct, setSellCostRatePct] = useState("");
-  const [rentNetMonthly, setRentNetMonthly] = useState("");
-  const [saleAge, setSaleAge] = useState("");
 
-  /** —— 顯示模式 —— */
-  const [mode, setMode] = useState<"real" | "nominal">("real");
+// =================================================================
+// 主組件
+// =================================================================
 
-  /** ===== 計算用數值 ===== */
-  const ageN = toNumber(age);
-  const retireAgeN = toNumber(retireAge);
-  const lifeExpN = toNumber(lifeExp);
+export default function RetirePage() {
+    const [inputs, setInputs] = useState<CalculatorInputs>(defaultInputs);
+    const [newPlanTitle, setNewPlanTitle] = useState("我的退休試算 " + new Date().toLocaleDateString()); 
 
-  const monthlyExpenseN = toNumber(monthlyExpense);
-  const monthlySavingN  = toNumber(monthlySaving);
+    // 儲存試算相關狀態
+    const [showSaveModal, setShowSaveModal] = useState(false);
+    const [saveForm, setSaveForm] = useState({ name: '', email: '' });
+    const [saving, setSaving] = useState(false);
+    const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
-  const cashN   = toNumber(cash);
-  const investN = toNumber(invest);
-  const realEstateN = toNumber(realEstate);
+    // 載入試算相關狀態
+    const [showLoadModal, setShowLoadModal] = useState(false);
+    const [loadEmail, setLoadEmail] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [loadStatus, setLoadStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
-  const rPre = toRate(rPrePct);
-  const rPost = toRate(rPostPct);
-  const inflation = toRate(inflationPct);
-  const reApp = toRate(reAppPct);
-  const sellCostRate = clamp(toRate(sellCostRatePct), 0, 1);
-  const medicalLateBoost = Math.max(0, toRate(medicalLateBoostPct));
-
-  const postFixedIncomeN = toNumber(postFixedIncome);
-  const rentNetMonthlyN  = toNumber(rentNetMonthly);
-
-  const saleAgeN = saleAge ? Number(saleAge.replaceAll(",", "")) : retireAgeN;
-  const yrsToSale = Math.max(saleAgeN - ageN, 0);
-
-  const yrsToRetire = Math.max(retireAgeN - ageN, 0);
-  const yrsAfter    = Math.max(lifeExpN - retireAgeN, 0);
-  const monthsToRetire = yrsToRetire * 12;
-  const monthsToSale   = Math.max(yrsToSale * 12, 0);
-
-  /** 資產成長（到退休時） */
-  const investAtRetire = Math.max(investN, 0) * Math.pow(1 + rPre, yrsToRetire);
-  const reAtRetire     = Math.max(realEstateN, 0) * Math.pow(1 + reApp, yrsToRetire);
-  const cashAtRetire   = Math.max(cashN, 0);
-  const savingFV       = annuityFV_monthly(Math.max(monthlySavingN, 0), rPre, monthsToRetire);
-
-  /** 退休後固定收入（實質、以退休時購買力） */
-  const fixedIncomeMonthly_nominal =
-    Math.max(0, postFixedIncomeN) + (reMode === "rent" ? Math.max(0, rentNetMonthlyN) : 0);
-  const fixedIncomeMonthly_realAtRetire = fixedIncomeMonthly_nominal / Math.pow(1 + inflation, yrsToRetire);
-
-  /** 退休後實質報酬率 */
-  const rRealPost = (1 + rPost) / (1 + inflation) - 1;
-
-  /** 每年淨支出（實質） */
-  const netMonthly_real = Math.max(0, monthlyExpenseN / Math.pow(1 + inflation, yrsToRetire) - fixedIncomeMonthly_realAtRetire);
-  const netAnnual_real  = netMonthly_real * 12;
-
-  /** 後期醫療分段 */
-  const lastYears  = Math.min(10, yrsAfter);
-  const frontYears = Math.max(yrsAfter - lastYears, 0);
-
-  /** —— 房貸：本息均攤固定利率 —— */
-  const loanP  = toNumber(mortgageBalance);                // 本金（餘額）
-  const loanAPR = toRate(mortgageAprPct);                  // 年利率
-  const loanN   = Math.max(Math.round(toNumber(mortgageYearsLeft) * 12), 0); // 剩餘月數
-  const im = loanAPR / 12;
-  const loanMonthlyPay = (loanN > 0)
-    ? (Math.abs(im) < 1e-9 ? (loanP / loanN) : loanP * im / (1 - Math.pow(1 + im, -loanN)))
-    : 0;
-
-  function loanRemainAfter(kMonths: number) {
-    if (loanN <= 0) return 0;
-    const k = Math.min(Math.max(kMonths, 0), loanN);
-    if (Math.abs(im) < 1e-9) {
-      return Math.max(loanP - loanMonthlyPay * k, 0);
-    }
-    const pow = Math.pow(1 + im, k);
-    const remain = loanP * pow - loanMonthlyPay * (pow - 1) / im;
-    return Math.max(remain, 0);
-  }
-
-  const loanRemainAtRetire = loanRemainAfter(monthsToRetire);
-  const loanRemainAtSale   = loanRemainAfter(monthsToSale);
-
-  /** 退休後仍需繳的房貸期數 & 實質月額（以退休當下購買力） */
-  const monthsLoanAfterRetire = Math.max(loanN - monthsToRetire, 0);
-  const yearsLoanAfterRetire  = Math.min(yrsAfter, monthsLoanAfterRetire / 12);
-  const loanMonthly_realAtRetire = loanMonthlyPay / Math.pow(1 + inflation, yrsToRetire);
-
-  /** ▶ 不動產處置：加入「預計出售年齡」＋ 房貸 */
-  let realEstateLumpToAssetsAtRetire = 0; // 名目：退休時資產（退休前/當下賣）
-  let realEstatePVtoReduceNeed_real = 0;  // 實質：抵減需求（退休後賣）
-
-  if (reMode === "sell") {
-    // 出售時點名目價值
-    const reAtSale_nominal = Math.max(realEstateN, 0) * Math.pow(1 + reApp, yrsToSale);
-    // 出售淨額（名目）：扣出售成本與「出售時剩餘房貸」
-    const grossLessCost = reAtSale_nominal * (1 - sellCostRate);
-    const netAtSale_nominal = Math.max(grossLessCost - loanRemainAtSale, 0);
-
-    if (saleAgeN <= retireAgeN) {
-      // 退休前/當下出售：淨額滾到退休時點（名目）
-      const growYears = Math.max(retireAgeN - saleAgeN, 0);
-      realEstateLumpToAssetsAtRetire = netAtSale_nominal * Math.pow(1 + rPre, growYears);
-    } else {
-      // 退休後出售：折成退休時點實質現值，用來抵減所需金額
-      const yrsAfterRetire = saleAgeN - retireAgeN;
-      const netAtSale_realAtSale = netAtSale_nominal / Math.pow(1 + inflation, yrsToSale);
-      realEstatePVtoReduceNeed_real = netAtSale_realAtSale * Math.pow(1 + rRealPost, -yrsAfterRetire);
-    }
-  }
-
-  /** 退休時資產（名目/實質） */
-  let assetsNominalAtRetire = cashAtRetire + investAtRetire + savingFV;
-  if (reMode === "keep") {
-    // 保留：以淨值入帳（市值－退休時剩餘貸款）
-    const equityAtRetire = Math.max(reAtRetire - loanRemainAtRetire, 0);
-    assetsNominalAtRetire += equityAtRetire;
-  } else if (reMode === "sell") {
-    assetsNominalAtRetire += realEstateLumpToAssetsAtRetire;
-  }
-  // 出租：不把市值算入流動資產（租金已計入固定收入）
-  const assetsRealAtRetire = assetsNominalAtRetire / Math.pow(1 + inflation, yrsToRetire);
-
-  /** 退休所需金額（實質） */
-  let required_real =
-    annuityPV(netAnnual_real, rRealPost, frontYears) +
-    annuityPV(netAnnual_real * (1 + medicalLateBoost), rRealPost, lastYears) *
-      Math.pow(1 + rRealPost, -frontYears);
-
-  // 退休後出售 → 折現值抵減需求
-  if (reMode === "sell" && saleAgeN > retireAgeN) {
-    required_real = Math.max(0, required_real - realEstatePVtoReduceNeed_real);
-  }
-
-  // 房貸退休後仍需繳 → 折成年金現值，加到需要金額
-  if (yearsLoanAfterRetire > 0 && loanMonthly_realAtRetire > 0) {
-    const loanAnnual_real = loanMonthly_realAtRetire * 12;
-    required_real += annuityPV(loanAnnual_real, rRealPost, yearsLoanAfterRetire);
-  }
-
-  /** 名目顯示用 */
-  const required_nominalAtRetire = required_real * Math.pow(1 + inflation, yrsToRetire);
-  const needForDisplay   = mode === "real" ? required_real : required_nominalAtRetire;
-  const assetsForDisplay = mode === "real" ? assetsRealAtRetire : assetsNominalAtRetire;
-
-  const gap = needForDisplay - assetsForDisplay;
-  const coverage = needForDisplay > 0 ? assetsForDisplay / needForDisplay : 0;
-
-  /** 以實質視角估算可支撐年數 */
-  const yearsCovered = useMemo(() => {
-    const annual = netAnnual_real;
-    if (annual <= 0 || assetsRealAtRetire <= 0) return 0;
-    const rr = rRealPost;
-    let lo = 0, hi = Math.max(yrsAfter, 100);
-    for (let i = 0; i < 40; i++) {
-      const mid = (lo + hi) / 2;
-      const pv = annuityPV(annual, rr, mid);
-      if (pv > assetsRealAtRetire) hi = mid; else lo = mid;
-    }
-    return Math.round(lo * 10) / 10;
-  }, [netAnnual_real, assetsRealAtRetire, rRealPost, yrsAfter]);
-
-  /** === 儲存試算功能 === */
-  async function handleSavePlan() {
-    // 1) 確保有 session（匿名登入）
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (!sessionData?.session) {
-      const { error: anonErr } = await supabase.auth.signInAnonymously();
-      if (anonErr) { alert(`登入失敗：${anonErr.message}`); return; }
-    }
-    // 2) 取得 user
-    const { data: userRes, error: userErr } = await supabase.auth.getUser();
-    if (userErr || !userRes?.user) { alert(`取得使用者失敗：${userErr?.message ?? "unknown"}`); return; }
-
-    // 3) 組 inputs（保留所有欄位）
-    const inputs = {
-      age, retireAge, lifeExp,
-      monthlyExpense, monthlySaving, postFixedIncome,
-      cash, invest, realEstate,
-      mortgageBalance, mortgageAprPct, mortgageYearsLeft,
-      rPrePct, rPostPct, inflationPct, reAppPct, medicalLateBoostPct,
-      reMode, sellCostRatePct, rentNetMonthly, saleAge,
-      mode
+    // 核心計算 Hook - 確保 outputs 永遠是完整的物件
+    const outputs = useRetirementCalculator(inputs);
+    
+    // 從 outputs 解構必要的屬性
+    const { fmt, errorMessage, needForDisplay, assetsForDisplay, gap, coverage, yearsCovered } = outputs; 
+    
+    // 處理輸入變化
+    const handleInputChange = (field: keyof CalculatorInputs, value: string) => {
+        setInputs(prev => ({ ...prev, [field]: value }));
     };
 
-    // 4) 寫入 plans
-    const { error: insertErr } = await supabase.from("plans").insert({
-      user_id: userRes.user.id,
-      name: "我的退休試算",
-      inputs,
-      version: 1
-    });
-    if (insertErr) alert(`儲存失敗：${insertErr.message}`); else alert("✅ 已成功儲存到 Supabase（plans）！");
-  }
+    const inputProps = useMemo(() => ({
+        inputs,
+        handleInputChange,
+        outputs, 
+        fmt: fmt, 
+    }), [inputs, outputs, fmt]);
 
-  return (
-    <div className="min-h-screen bg-neutral-50 text-neutral-900">
-      {/* 頂部標語（強烈行銷版） */}
-      <header className={`bg-gradient-to-r ${BRAND.from} ${BRAND.to} text-white`}>
-        <div className="mx-auto max-w-md px-6 py-12 text-center">
-          <h1 className="text-3xl font-extrabold tracking-tight leading-snug">
-            讓退休，不只是夢想<br />
-            而是確定的未來
-          </h1>
-        </div>
-      </header>
+    // 儲存試算處理函數
+    const handleSavePlan = async () => {
+        setSaving(true);
+        setSaveStatus(null);
+        
+        try {
+            // 清理輸入資料
+            const cleanedInputs = Object.fromEntries(
+                Object.entries(inputs).map(([key, value]) => [
+                    key,
+                    typeof value === 'string' ? value.replaceAll(",", "").replace(/[^0-9.]/g, '') : value
+                ])
+            ) as CalculatorInputs;
 
-      <main className="mx-auto max-w-md px-5 pb-28 -mt-4 space-y-6">
-        {/* 1. 基本資料 */}
-        <section className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5 p-6 space-y-5">
-          <h2 className="text-lg font-semibold text-neutral-800">1. 填寫基本資料</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <NumberField label="當前年齡" value={age} onChange={setAge} placeholder="如 44" />
-            <NumberField label="預計退休年齡" value={retireAge} onChange={setRetireAge} placeholder="如 60" />
-          </div>
-          <NumberField label="預估壽命" value={lifeExp} onChange={setLifeExp} placeholder="如 90" />
-          <CurrencyField label="退休後每月支出 (NTD)" value={monthlyExpense} onChange={setMonthlyExpense} />
-          <CurrencyField label="退休前每月可儲蓄 (NTD)" value={monthlySaving} onChange={setMonthlySaving} />
-          <CurrencyField label="退休後固定月收入 (NTD)" value={postFixedIncome} onChange={setPostFixedIncome} />
-        </section>
+            // 自動生成標題
+            const planName = `${saveForm.name} 的退休規劃 - ${new Date().toLocaleDateString('zh-TW')}`;
 
-        {/* 2. 資產資訊 */}
-        <section className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5 p-6 space-y-5">
-          <h2 className="text-lg font-semibold text-neutral-800">2. 填寫資產資訊</h2>
-          <CurrencyField label="現金與存款 (NTD)" value={cash} onChange={setCash} />
-          <CurrencyField label="金融投資 (NTD)" value={invest} onChange={setInvest} />
-          <CurrencyField label="不動產可動用估值 (NTD)" value={realEstate} onChange={setRealEstate} />
+            // 儲存到 plans 表
+            const { error } = await supabase
+                .from('plans')
+                .insert({
+                    user_id: null,
+                    user_email: saveForm.email,
+                    name: planName,
+                    inputs: cleanedInputs,
+                    outputs: outputs,
+                    is_public: false
+                });
 
-          {/* 房貸三欄 */}
-          <div className="mt-2 grid grid-cols-1 gap-4">
-            <CurrencyField label="房貸目前餘額 (NTD)" value={mortgageBalance} onChange={setMortgageBalance} />
-            <PercentField label="房貸年利率 (%)" value={mortgageAprPct} onChange={setMortgageAprPct} placeholder="如 2" />
-            <NumberField label="房貸剩餘年期 (年)" value={mortgageYearsLeft} onChange={setMortgageYearsLeft} placeholder="如 20" />
-          </div>
-        </section>
+            if (error) throw error;
 
-        {/* 3. 進階設定 */}
-        <details className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5 p-6">
-          <summary className="cursor-pointer text-lg font-semibold text-neutral-800">3. 進階設定 ▾</summary>
-          <div className="mt-5 space-y-5">
-            <div className="grid grid-cols-2 gap-4">
-              <PercentField label="退休前投資報酬率 (年化 %)" value={rPrePct} onChange={setRPrePct} />
-              <PercentField label="退休後投資報酬率 (年化 %)" value={rPostPct} onChange={setRPostPct} />
-              <PercentField label="年均通膨率 (%)" value={inflationPct} onChange={setInflationPct} />
-              <PercentField label="不動產年增率 (%)" value={reAppPct} onChange={setReAppPct} />
-            </div>
-            <PercentField label="後期醫療支出加成 (%)" value={medicalLateBoostPct} onChange={setMedicalLateBoostPct} />
+            setSaveStatus({ type: 'success', message: `${saveForm.name}，您的試算結果已成功儲存！` });
+            setSaveForm({ name: '', email: '' });
+            setTimeout(() => {
+                setShowSaveModal(false);
+                setSaveStatus(null);
+            }, 2000);
+            
+        } catch (err) {
+            console.error('儲存錯誤:', err);
+            const errorMessage = err instanceof Error ? err.message : '請稍後再試';
+            setSaveStatus({ type: 'error', message: `儲存失敗: ${errorMessage}` });
+        } finally {
+            setSaving(false);
+        }
+    };
 
-            <Select label="不動產處置" value={reMode} onChange={(v)=>setReMode(v as any)}
-              options={[{label:"保留",value:"keep"},{label:"出售",value:"sell"},{label:"出租",value:"rent"}]} />
+    // 載入試算處理函數
+    const handleLoadPlan = async () => {
+        setLoading(true);
+        setLoadStatus(null);
+        
+        try {
+            // 查詢最新一筆記錄
+            const { data, error } = await supabase
+                .from('plans')
+                .select('*')
+                .eq('user_email', loadEmail)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
 
-            {reMode==="sell" && (
-              <div className="grid grid-cols-2 gap-4">
-                <NumberField label="預計出售年齡" value={saleAge} onChange={setSaleAge} placeholder="如 70" />
-                <PercentField label="出售成本率 (%)" value={sellCostRatePct} onChange={setSellCostRatePct} />
-              </div>
-            )}
-            {reMode==="rent" && (
-              <CurrencyField label="出租淨月租 (NTD)" value={rentNetMonthly} onChange={setRentNetMonthly} />
-            )}
-          </div>
-        </details>
+            if (error) throw error;
 
-        {/* 4. 計算結果 */}
-        <section className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5 p-6 space-y-5">
-          <h2 className="text-lg font-semibold text-neutral-800">4. 計算結果</h2>
-          <p className="text-xs text-neutral-500 -mt-1">請先填寫資料</p>
+            if (!data) {
+                setLoadStatus({ type: 'error', message: '找不到與此 Email 相關的試算記錄，請確認 Email 是否正確。' });
+                return;
+            }
 
-          <div className="mt-2 grid grid-cols-2 gap-3">
-            <Segment value={mode} onChange={(v)=>setMode(v as any)} options={[
-              {label:"實質", value:"real"}, {label:"名目", value:"nominal"}
-            ]}/>
-          </div>
+            // 從 name 中解析出用戶名稱（例如："王小明 的退休規劃 - 2025/10/8" -> "王小明"）
+            const userName = data.name.split(' 的退休規劃')[0] || '您';
 
-          <div className="rounded-xl bg-gradient-to-br from-neutral-50 to-neutral-100 p-6 text-center">
-            <div className="text-sm text-neutral-600 mb-2">差額</div>
-            <div className={`text-4xl font-bold ${gap>=0?"text-red-600":"text-emerald-600"} break-all`}>
-              {fmt(Math.abs(gap))} 元
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-4">
-              <Kpi label="退休所需金額" value={`${fmt(needForDisplay)} 元`} />
-              <Kpi label="預估退休資產" value={`${fmt(assetsForDisplay)} 元`} />
-            </div>
-            <p className="mt-3 text-sm text-neutral-600 break-all">
-              覆蓋率 {(coverage*100).toFixed(1)}%；以實質視角估計可支撐約 {yearsCovered} 年（目標 {yrsAfter} 年）。
-            </p>
-          </div>
-        </section>
+            // 載入資料到表單
+            setInputs(data.inputs as CalculatorInputs);
+            
+            setLoadStatus({ type: 'success', message: `${userName}您好，這是您前一次的試算結果。` });
+            setTimeout(() => {
+                setShowLoadModal(false);
+                setLoadStatus(null);
+                setLoadEmail('');
+            }, 2000);
+            
+        } catch (err) {
+            console.error('載入錯誤:', err);
+            const errorMessage = err instanceof Error ? err.message : '請稍後再試';
+            setLoadStatus({ type: 'error', message: `載入失敗: ${errorMessage}` });
+        } finally {
+            setLoading(false);
+        }
+    };
 
-        {/* 5. 每月儲蓄建議 */}
-        <section className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5 p-6 space-y-5">
-          <h2 className="text-lg font-semibold text-neutral-800">5. 每月儲蓄建議</h2>
-          <div className="rounded-xl bg-gradient-to-br from-blue-50 to-blue-100 p-6 text-center">
-            <div className="text-sm text-blue-700 mb-2">建議每月儲蓄金額</div>
-            <div className="text-3xl font-bold text-blue-800">
-              {gap > 0 ? fmt(Math.ceil(gap / Math.max(monthsToRetire, 1))) : "0"} 元
-            </div>
-          </div>
-        </section>
 
-        {/* 6. 計算說明 */}
-        <section className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5 p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-neutral-800">6. 計算說明</h2>
+    const handleLoadButtonClick = () => {
+        alert('載入功能暫時未啟用，請直接使用預設值或自行修改。');
+    };
 
-          {/* 基本公式 */}
-          <div className="bg-gradient-to-br from-neutral-50 to-neutral-100 p-4 rounded-lg">
-            <h3 className="font-semibold text-neutral-800 mb-2">基本公式</h3>
-            <ul className="space-y-2 text-sm text-neutral-700">
-              <li>• 退休所需金額 = 退休後年支出 × 年金現值係數</li>
-              <li>• 預估退休資產 = 各項資產與儲蓄累積的合計（見下方「資產計算邏輯」）</li>
-              <li>• 實質報酬率 = (1 + 名目報酬率) ÷ (1 + 通膨率) − 1</li>
-              <li>• 後期醫療加成：最後 10 年支出增加 {medicalLateBoostPct || "0"}%</li>
-            </ul>
-          </div>
+    // 計算退休前年數 (用於儲蓄建議)
+    const currentAge = Number(inputs.age) || 0;
+    const retireAge = Number(inputs.retireAge) || 0;
+    const yearsToRetire = Math.max(0, retireAge - currentAge);
 
-          {/* 年金現值係數 */}
-          <div className="bg-gradient-to-br from-neutral-50 to-neutral-100 p-4 rounded-lg">
-            <h3 className="font-semibold text-neutral-800 mb-2">年金現值係數是什麼？</h3>
-            <p className="text-sm text-neutral-700 leading-6">
-              將「退休期間每年的固定支出」折算成在退休當下所需的一次性準備金。計算式：<br/>
-              年金現值係數 = (1 − (1 + r)<sup>−n</sup>) ÷ r；其中 r 為「退休後實質報酬率」，n 為「退休年數」。
-            </p>
-            <ul className="mt-2 space-y-1 text-sm text-neutral-700">
-              <li>• 本工具以 <code>annuityPV(annual, r, years)</code> 實作，上式內嵌於函式中。</li>
-              <li>• annual：退休後每年「淨支出」（已扣固定月收入/房租，並以退休當下購買力表示）。</li>
-              <li>• years：若有最後 10 年醫療加成，會拆段各自計算再加總。</li>
-            </ul>
-          </div>
 
-          {/* 資產計算邏輯（含現金/投資/不動產＋房貸） */}
-          <div className="bg-gradient-to-br from-neutral-50 to-neutral-100 p-4 rounded-lg">
-            <h3 className="font-semibold text-neutral-800 mb-2">資產計算邏輯</h3>
-            <ul className="space-y-2 text-sm text-neutral-700">
-              <li>• 現金：直接加總，假設沒有利息（除非未來加入定存/貨幣基金收益）。</li>
-              <li>• 金融投資：依設定的「退休前投資報酬率」做複利成長至退休時。</li>
-              <li>• 每月儲蓄：用「年金終值公式」累積至退休時。</li>
-              <li>
-                • 不動產（依情境選擇）：
-                <ul className="list-disc list-inside ml-4 space-y-1">
-                  <li>保留：以「退休時市值 − 退休時剩餘房貸本金」計入淨值。</li>
-                  <li>出售：淨額 =「出售價值 × (1 − 出售成本率) − 出售時剩餘房貸本金」。</li>
-                  <li>  – 退休前/當下出售：淨額滾入退休資產。</li>
-                  <li>  – 退休後出售：將淨額折現回退休時，抵減所需金額。</li>
-                  <li>出租：不把市值算入退休資產，但租金收入會加到「退休後固定月收入」。</li>
-                </ul>
-              </li>
-              <li>• 房貸月付：若退休後仍需繳，會以「退休當下購買力」換算為實質月額，並在尚需繳的期間內，折算為年金現值加總至所需金額。</li>
-            </ul>
-          </div>
+    // =================================================================
+    // 渲染計算結果區塊
+    // =================================================================
 
-          {/* 其他假設 */}
-          <div className="bg-gradient-to-br from-neutral-50 to-neutral-100 p-4 rounded-lg">
-            <h3 className="font-semibold text-neutral-800 mb-2">其他假設</h3>
-            <ul className="space-y-2 text-sm text-neutral-700">
-              <li>• 退休前投資報酬率：{rPrePct || "未設定"}%</li>
-              <li>• 退休後投資報酬率：{rPostPct || "未設定"}%</li>
-              <li>• 年均通膨率：{inflationPct || "未設定"}%</li>
-              <li>• 不動產年增率：{reAppPct || "未設定"}%</li>
-            </ul>
-          </div>
-        </section>
-      </main>
-
-      {/* 底部功能 */}
-      <footer className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur ring-1 ring-black/5">
-        <div className="mx-auto max-w-md px-5 py-3 grid grid-cols-2 gap-3">
-          <button
-            onClick={()=>window.scrollTo({top:0,behavior:"smooth"})}
-            className="rounded-xl border border-neutral-300 py-3 text-sm font-medium"
-          >
-            回到頂端
-          </button>
-          <button
-            className={`rounded-xl py-3 text-sm font-semibold text-white ${BRAND.bg}`}
-            onClick={handleSavePlan}
-          >
-            儲存試算
-          </button>
-        </div>
-      </footer>
-    </div>
-  );
-}
-
-/* ─── 共用元件 ─── */
-function Segment({ value, onChange, options }:{
-  value:string; onChange:(v:string)=>void; options:{label:string;value:string}[];
-}) {
-  return (
-    <div className="grid grid-cols-2 rounded-lg border bg-neutral-50 p-1 text-sm">
-      {options.map(o=>{
-        const active=value===o.value;
+    const renderResults = () => {
+        
+        // 🎯 結果區塊永遠渲染 (不檢查 errorMessage)
+        
         return (
-          <button key={o.value} onClick={()=>onChange(o.value)}
-            className={`rounded-md py-1.5 ${active?"bg-white shadow-sm font-semibold":"text-neutral-600"}`}>
-            {o.label}
-          </button>
+            <div className="my-6">
+                
+                {/* 修正 JSX 語法錯誤的計算說明區塊：避免使用連續的特殊符號 */}
+                <div className="p-4 bg-gray-100 rounded-lg mb-6 shadow-sm">
+                    <h4 className="text-lg font-bold text-gray-700 mb-2">計算方式與邏輯說明</h4>
+                    <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+                        <li>**核心原則**: **實質購買力 (Real Value)** 計算。所有金額均已考慮通膨因素，避免名目金額失真。</li>
+                        {/* 關鍵修正點：將公式寫成更容易解析的純文字 */}
+                        <li>**實質報酬率**: 公式為 **(名目報酬率 - 通膨率) 除以 (1 + 通膨率)**。</li>
+                        <li>**資金缺口**: 資產與需求的比較是在**同一時間點 (退休時點)** 的實質購買力基礎上進行。</li>
+                        {/* 修正點：避免使用 < 符號，改用文字描述 */}
+                        <li>**年齡限制**: 必須滿足 **當前年齡要小於退休年齡，退休年齡要小於預估壽命**。</li>
+                    </ul>
+                </div>
+
+                <h3 className="text-2xl font-bold mb-4 text-emerald-700 border-b pb-2">5. 計算結果</h3>
+                <div className="grid md:grid-cols-3 gap-4">
+                    <ResultBox title="退休所需金額 (實質)" value={`NT$ ${fmt(needForDisplay)}`} />
+                    <ResultBox title="預估退休資產 (實質)" value={`NT$ ${fmt(assetsForDisplay)}`} />
+                    <ResultBox 
+                        title="資金缺口" 
+                        value={`NT$ ${fmt(gap)}`} 
+                        className={gap < 0 ? 'bg-red-50' : 'bg-emerald-50'}
+                        valueClass={gap < 0 ? 'text-red-600' : 'text-emerald-600'}
+                    /> 
+                </div>
+                <p className="text-center text-sm mt-4 text-gray-600">
+                    覆蓋率: **{(coverage * 100).toFixed(1)}%** (目標 {yearsCovered || '--'} 年)。
+                    以實質購買力計算可支撐約 **{yearsCovered}** 年。
+                </p>
+                
+                {yearsToRetire > 0 && (
+                    <div className="mt-8 p-6 bg-blue-50 rounded-xl shadow-lg">
+                        <h4 className="text-xl font-bold text-blue-800 mb-2">6. 每月儲蓄建議</h4>
+                        <p className="text-2xl font-extrabold text-blue-600 text-center">
+                            建議每月儲蓄金額: NT$ {fmt(Math.max(0, -gap / yearsToRetire / 12))}
+                        </p>
+                        <p className="text-sm text-blue-600 text-center mt-2">（根據資金缺口平攤至退休前剩餘 {yearsToRetire} 年）</p>
+                    </div>
+                )}
+            </div>
         );
-      })}
-    </div>
-  );
-}
-function Kpi({ label, value }:{label:string; value:string}) {
-  return (
-    <div className="rounded-xl border bg-white p-4 text-center">
-      <div className="text-xs text-neutral-500">{label}</div>
-      <div className="mt-1 text-xl font-semibold break-all">{value}</div>
-    </div>
-  );
-}
-function NumberField({ label, value, onChange, placeholder }:{
-  label:string; value:string; onChange:(v:string)=>void; placeholder?:string;
-}) {
-  return (
-    <div>
-      <label className="mb-2 block text-sm font-medium text-neutral-700">{label}</label>
-      <input
-        type="text" inputMode="numeric"
-        value={value}
-        onChange={(e)=>onChange(e.target.value.replace(/[^\d]/g,""))}
-        className="w-full rounded-lg border border-neutral-300 px-4 py-3 text-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-colors"
-        placeholder={placeholder || "請輸入數字"}
-      />
-    </div>
-  );
-}
-function CurrencyField({ label, value, onChange, placeholder }:{
-  label:string; value:string; onChange:(v:string)=>void; placeholder?:string;
-}) {
-  const handleChange = (s: string) => {
-    const digits = s.replace(/[^\d]/g, "");
-    if (!digits) { onChange(""); return; }
-    onChange(Number(digits).toLocaleString());
-  };
-  return (
-    <div>
-      <label className="mb-2 block text-sm font-medium text-neutral-700">{label}</label>
-      <input
-        inputMode="numeric"
-        value={value}
-        onChange={(e)=>handleChange(e.target.value)}
-        onBlur={()=>value && onChange(Number(value.replaceAll(",","")).toLocaleString())}
-        className="w-full rounded-lg border border-neutral-300 px-4 py-3 text-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-colors"
-        placeholder={placeholder || "請輸入金額"}
-      />
-    </div>
-  );
-}
-function PercentField({ label, value, onChange, placeholder }:{
-  label:string; value:string; onChange:(v:string)=>void; placeholder?:string;
-}) {
-  const handleChange = (s: string) => {
-    const cleaned = s.replace(/[^\d.]/g,"").replace(/^(\d*\.\d*).*$/,"$1");
-    onChange(cleaned);
-  };
-  return (
-    <div>
-      <label className="mb-2 block text-sm font-medium text-neutral-700">{label}</label>
-      <div className="flex items-center">
-        <input
-          value={value}
-          onChange={(e)=>handleChange(e.target.value)}
-          className="w-full rounded-lg border border-neutral-300 px-4 py-3 text-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-colors"
-          placeholder={placeholder || "例如 2 或 2.5"}
-          inputMode="decimal"
-        />
-        <span className="ml-3 text-sm font-medium text-neutral-600">%</span>
-      </div>
-    </div>
-  );
-}
-function Select({ label, value, onChange, options }:{
-  label:string; value:string; onChange:(v:string)=>void; options:{label:string; value:string}[];
-}) {
-  return (
-    <div>
-      <label className="mb-2 block text-sm font-medium text-neutral-700">{label}</label>
-      <select
-        value={value}
-        onChange={(e)=>onChange(e.target.value)}
-        className="w-full rounded-lg border border-neutral-300 px-4 py-3 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-colors"
-      >
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </div>
-  );
+    };
+
+    return (
+        <div className="min-h-screen bg-gray-50 flex flex-col items-center">
+            {/* Header */}
+            <div className={`w-full p-8 text-center text-white shadow-md ${BRAND}`}>
+                <h1 className="text-3xl font-bold md:text-4xl">
+                    讓退休，不只是夢想，而是可看見的目標
+                </h1>
+            </div>
+
+            {/* Main Content Area */}
+            <main className="flex-grow w-full max-w-4xl px-4 py-8 md:p-8">
+                {/* 輸入欄位和年齡警告 (錯誤訊息會在 CalculatorFields 內部處理) */}
+                <CalculatorFields {...inputProps} /> 
+                
+                {/* 計算結果區塊 - 永遠渲染 (結果為 0 或計算值) */}
+                {renderResults()}
+            </main>
+
+            {/* Fixed Footer */}
+            <footer className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur ring-1 ring-gray-200 z-10">
+                <div className="max-w-4xl mx-auto w-full p-3 grid grid-cols-2 gap-3 md:gap-4">
+                    <button
+                        className="rounded-xl px-3 py-3 text-sm font-semibold border border-emerald-600 text-emerald-600 hover:bg-emerald-50 transition"
+                        onClick={() => setShowLoadModal(true)}
+                    >
+                        載入試算
+                    </button>
+                    <button
+                        className="rounded-xl px-3 py-3 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition"
+                        onClick={() => setShowSaveModal(true)}
+                    >
+                        儲存試算
+                    </button>
+                </div>
+            </footer>
+
+            {/* 儲存試算彈窗 */}
+            {showSaveModal && (
+                <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full relative">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setShowSaveModal(false);
+                                setSaveStatus(null);
+                            }}
+                            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+                        >
+                            ✕
+                        </button>
+                        <h3 className="text-2xl font-bold text-gray-800 mb-4">儲存您的試算結果</h3>
+                        <form onSubmit={(e) => { e.preventDefault(); handleSavePlan(); }} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    用戶名稱 <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="請輸入您的姓名"
+                                    required
+                                    value={saveForm.name}
+                                    onChange={e => setSaveForm(prev => ({ ...prev, name: e.target.value }))}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-gray-900"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Email <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="email"
+                                    placeholder="example@email.com"
+                                    required
+                                    value={saveForm.email}
+                                    onChange={e => setSaveForm(prev => ({ ...prev, email: e.target.value }))}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-gray-900"
+                                />
+                            </div>
+                            {saveStatus && (
+                                <div className={`p-3 border rounded ${
+                                    saveStatus.type === 'success'
+                                        ? 'bg-green-100 text-green-800 border-green-400'
+                                        : 'bg-red-100 text-red-800 border-red-400'
+                                }`}>
+                                    {saveStatus.message}
+                                </div>
+                            )}
+                            <button
+                                type="submit"
+                                disabled={saving}
+                                className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition-colors disabled:bg-gray-400"
+                            >
+                                {saving ? '儲存中...' : '儲存'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* 載入試算彈窗 */}
+            {showLoadModal && (
+                <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full relative">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setShowLoadModal(false);
+                                setLoadStatus(null);
+                            }}
+                            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+                        >
+                            ✕
+                        </button>
+                        <h3 className="text-2xl font-bold text-gray-800 mb-4">載入您的試算結果</h3>
+                        <form onSubmit={(e) => { e.preventDefault(); handleLoadPlan(); }} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Email <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="email"
+                                    placeholder="請輸入您儲存時使用的 Email"
+                                    required
+                                    value={loadEmail}
+                                    onChange={e => setLoadEmail(e.target.value)}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-gray-900"
+                                />
+                                <p className="text-sm text-gray-500 mt-1">我們會載入您最近一次的試算記錄</p>
+                            </div>
+                            {loadStatus && (
+                                <div className={`p-3 border rounded ${
+                                    loadStatus.type === 'success'
+                                        ? 'bg-green-100 text-green-800 border-green-400'
+                                        : 'bg-red-100 text-red-800 border-red-400'
+                                }`}>
+                                    {loadStatus.message}
+                                </div>
+                            )}
+                            <button
+                                type="submit"
+                                disabled={loading}
+                                className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition-colors disabled:bg-gray-400"
+                            >
+                                {loading ? '載入中...' : '載入'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }
