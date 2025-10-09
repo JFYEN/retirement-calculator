@@ -298,23 +298,9 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
 
         // 11. 生成圖表數據 (逐年資產與支出)
         const chartData: YearlyData[] = [];
-        const currentAssets = calculatedAssets; // 從退休時的資產開始
         
         for (let i = 0; i <= yearsInRetire; i++) {
             const currentAge = nRetireAge + i;
-            
-            // 計算當年的固定收入（考慮租金開始年齡）
-            let yearlyFixedIncome = postFixedIncome * 12;
-            if (inputs.reMode === 'rent' && nRentAge > 0 && currentAge >= nRentAge) {
-                yearlyFixedIncome += rentNetMonthly * 12;
-            }
-            
-            // 計算當年的支出（包含醫療費用加成）
-            let yearlyExpense = annualExpense;
-            if (yearsInRetire - i <= 10) {
-                // 最後10年加成
-                yearlyExpense = annualExpense * (1 + medBoost);
-            }
             
             // 累計淨支出（從退休開始到當年）
             let cumulativeExpenses = 0;

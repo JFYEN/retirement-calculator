@@ -221,7 +221,7 @@ export function Select({ label, value, onChange, options }: SegmentProps) {
 // Main Component (主元件)
 // ----------------------------------------------------------------------
 
-export function CalculatorFields({ inputs, handleInputChange, outputs, errors = {} }: CalculatorProps) {
+export function CalculatorFields({ inputs, handleInputChange, errors = {} }: CalculatorProps) {
     
     // 檢查是否有填寫房地產估值（用於條件式顯示）
     const hasRealEstate = React.useMemo(() => {
@@ -239,9 +239,6 @@ export function CalculatorFields({ inputs, handleInputChange, outputs, errors = 
     const handleNumChange = (field: string, value: string) => {
         handleInputChange(field as keyof CalculatorInputs, value);
     };
-
-    // 🎯 友善提示與錯誤判斷
-    const isInitial = !inputs.age && !inputs.retireAge && !inputs.lifeExp;
 
     return (
         <div className="space-y-8">

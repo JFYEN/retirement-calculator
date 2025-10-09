@@ -20,7 +20,7 @@ interface RetirementChartProps {
 }
 
 // 自訂 Tooltip - 簡化版本
-const CustomTooltip = ({ active, payload, formatter }: { active?: boolean; payload?: any[]; formatter: (n: number) => string }) => {
+const CustomTooltip = ({ active, payload, formatter }: { active?: boolean; payload?: Array<{ payload: YearlyData }>; formatter: (n: number) => string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     const balance = data.assets;
