@@ -15,8 +15,15 @@ export interface CalculatorInputs {
     cash: string; invest: string; realEstate: string;
     mortgageBalance: string; mortgageAprPct: string; mortgageYearsLeft: string;
     rPrePct: string; rPostPct: string; inflationPct: string; reAppPct: string; medicalLateBoostPct: string;
-    reMode: "keep" | "sell" | "rent"; sellCostRatePct: string; rentNetMonthly: string; saleAge: string;
+    reMode: "keep" | "sell" | "rent"; sellCostRatePct: string; rentNetMonthly: string; saleAge: string; rentAge: string;
     mode: "real" | "nominal";
+}
+
+export interface YearlyData {
+    age: number;
+    year: number;
+    assets: number;
+    expenses: number;
 }
 
 export interface CalculatorOutputs {
@@ -28,7 +35,8 @@ export interface CalculatorOutputs {
     needForDisplay: number;
     assetsForDisplay: number;
     fmt: (n: number) => string;
-    errorMessage?: string; 
+    errorMessage?: string;
+    chartData?: YearlyData[];
 }
 
 // 統一的格式化工具：四捨五入到整數，並加上千分位逗號
@@ -52,6 +60,7 @@ const getInitialOutput = (errorMessage?: string): CalculatorOutputs => ({
     assetsForDisplay: 0,
     fmt: numberFormatter, 
     errorMessage: errorMessage,
+    chartData: [],
 });
 
 
@@ -170,8 +179,12 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
         const annualExpense = monthlyExpense * 12;
         let annualFixedIncome = postFixedIncome * 12;
 
-        if (inputs.reMode === 'rent') {
+        // 租金收入：只有在退休年齡 >= 開始出租年齡時才計入
+        const nRentAge = clean(inputs.rentAge);
+        let includesRentIncome = false;
+        if (inputs.reMode === 'rent' && nRentAge > 0 && nRetireAge >= nRentAge) {
             annualFixedIncome += rentNetMonthly * 12;
+            includesRentIncome = true;
         }
 
         const netExpenseFirstYear = Math.max(0, annualExpense - annualFixedIncome);
@@ -207,11 +220,14 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
         totalNeed += pvNormal;
         
         // 8. 計算預估累積資產 (ASSETS)
-    // 退休前預期年報酬率僅計算投資資產，不計算現金與存款
-    const initialAsset = invest;
+        // 退休前預期年報酬率僅計算投資資產，不計算現金與存款
+        const initialAsset = invest;
         const annualSaving = monthlySaving * 12;
-        // 退休前累積資產 (包含儲蓄終值和當前資產終值)
+        // 退休前累積資產 (包含儲蓄終值和當前投資資產終值)
         const futureAsset = fv(rEffPre, yearsToRetire, annualSaving, initialAsset);
+
+        // 現金與存款：不計報酬率，直接計入退休資產
+        const futureCash = cash;
 
         let futureRealEstate = 0;
         if (inputs.reMode === 'sell' && realEstate > 0) {
@@ -238,27 +254,38 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
             }
         }
 
-        const calculatedAssets = futureAsset + futureRealEstate;
+        // 計算退休時的總資產 = 現金 + 投資增值 + 房地產（如有出售）
+        const calculatedAssets = futureCash + futureAsset + futureRealEstate;
 
         // 9. 計算結果
         const gap = calculatedAssets - totalNeed;
         const coverage = totalNeed > 0 ? calculatedAssets / totalNeed : 0;
         
         // 計算資產耗盡年限 (簡化模型，用於 Years Covered 顯示)
-        let yearsCovered = yearsInRetire;
-        if (calculatedAssets < totalNeed && calculatedAssets > 0 && netExpenseFirstYear > 0) {
-            // 使用更準確的年限公式
-            if (rEffPost !== 0) {
-                const term = (calculatedAssets * rEffPost) / netExpenseFirstYear;
-                if (term < 1) {
-                    // 公式：n = -ln(1 - (A * r) / W) / ln(1 + r)
-                    yearsCovered = -Math.log(1 - term) / Math.log(1 + rEffPost);
-                }
+        let yearsCovered = 0; // 預設為 0，而非 yearsInRetire
+        
+        if (calculatedAssets > 0 && netExpenseFirstYear > 0) {
+            if (calculatedAssets >= totalNeed) {
+                // 資產足夠：可以撐到預估壽命
+                yearsCovered = yearsInRetire;
             } else {
-                // 零利率情況
-                yearsCovered = calculatedAssets / netExpenseFirstYear;
+                // 資產不足：計算可以撐多久
+                if (rEffPost !== 0) {
+                    const term = (calculatedAssets * rEffPost) / netExpenseFirstYear;
+                    if (term < 1) {
+                        // 公式：n = -ln(1 - (A * r) / W) / ln(1 + r)
+                        yearsCovered = -Math.log(1 - term) / Math.log(1 + rEffPost);
+                    } else {
+                        // 如果 term >= 1，表示資產可能足夠
+                        yearsCovered = yearsInRetire;
+                    }
+                } else {
+                    // 零利率情況：直接除以年支出
+                    yearsCovered = calculatedAssets / netExpenseFirstYear;
+                }
             }
         }
+        // 如果 calculatedAssets <= 0 或 netExpenseFirstYear <= 0，yearsCovered 保持為 0
         // 將年限四捨五入到整數，並確保不超過預估壽命
         yearsCovered = Math.max(0, Math.floor(Math.min(yearsCovered, yearsInRetire)));
 
@@ -271,7 +298,67 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
         const needForDisplay = isRealMode ? totalNeed : totalNeed * nominalFactor;
         const assetsForDisplay = isRealMode ? calculatedAssets : calculatedAssets * nominalFactor;
 
-        // 11. 最終回傳 (確保 errorMessage 為 undefined)
+        // 11. 生成圖表數據 (逐年資產與支出)
+        const chartData: YearlyData[] = [];
+        let currentAssets = calculatedAssets; // 從退休時的資產開始
+        
+        for (let i = 0; i <= yearsInRetire; i++) {
+            const currentAge = nRetireAge + i;
+            const yearsSinceRetirement = i;
+            
+            // 計算當年的固定收入（考慮租金開始年齡）
+            let yearlyFixedIncome = postFixedIncome * 12;
+            if (inputs.reMode === 'rent' && nRentAge > 0 && currentAge >= nRentAge) {
+                yearlyFixedIncome += rentNetMonthly * 12;
+            }
+            
+            // 計算當年的支出（包含醫療費用加成）
+            let yearlyExpense = annualExpense;
+            if (yearsInRetire - i <= 10) {
+                // 最後10年加成
+                yearlyExpense = annualExpense * (1 + medBoost);
+            }
+            
+            // 當年淨支出 = 總支出 - 固定收入
+            const yearlyNetExpense = Math.max(0, yearlyExpense - yearlyFixedIncome);
+            
+            // 累計淨支出（從退休開始到當年）
+            let cumulativeExpenses = 0;
+            for (let j = 0; j <= i; j++) {
+                const ageAtJ = nRetireAge + j;
+                
+                // 當年固定收入
+                let incomeAtJ = postFixedIncome * 12;
+                if (inputs.reMode === 'rent' && nRentAge > 0 && ageAtJ >= nRentAge) {
+                    incomeAtJ += rentNetMonthly * 12;
+                }
+                
+                // 當年支出
+                let expenseAtJ = annualExpense;
+                if (yearsInRetire - j <= 10) {
+                    expenseAtJ = annualExpense * (1 + medBoost);
+                }
+                
+                // 當年淨支出
+                const netExpenseAtJ = Math.max(0, expenseAtJ - incomeAtJ);
+                
+                // 將過去的淨支出以報酬率增值到當年
+                cumulativeExpenses += netExpenseAtJ * Math.pow(1 + rEffPost, i - j);
+            }
+            
+            // 計算當年剩餘資產 = 初始資產 * (1+報酬率)^年數 - 累計淨支出
+            const assetsWithGrowth = calculatedAssets * Math.pow(1 + rEffPost, i);
+            const remainingAssets = assetsWithGrowth - cumulativeExpenses;
+            
+            chartData.push({
+                age: currentAge,
+                year: yearsSinceRetirement,
+                assets: remainingAssets,
+                expenses: cumulativeExpenses
+            });
+        }
+
+        // 12. 最終回傳 (確保 errorMessage 為 undefined)
         return {
             need: totalNeed,
             assets: calculatedAssets,
@@ -282,6 +369,7 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
             assetsForDisplay: assetsForDisplay,
             fmt: numberFormatter, 
             errorMessage: undefined,
+            chartData: chartData,
         };
 
     }, [inputs]);
