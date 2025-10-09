@@ -1,7 +1,6 @@
 import React from "react";
 // 修正路徑
 import { CalculatorOutputs, CalculatorInputs } from "../../lib/useRetirementCalculator"; 
-import { supabase } from "@/lib/supabaseClient";
 import { FieldError } from "../../lib/useFieldValidation";
 
 // ----------------------------------------------------------------------
@@ -243,10 +242,6 @@ export function CalculatorFields({ inputs, handleInputChange, outputs, errors = 
 
     // 🎯 友善提示與錯誤判斷
     const isInitial = !inputs.age && !inputs.retireAge && !inputs.lifeExp;
-    const isAgeError = outputs.errorMessage &&
-        outputs.errorMessage !== "輸入或計算中..." &&
-        (outputs.errorMessage.includes("年齡") || outputs.errorMessage.includes("正數"));
-    const showHint = isInitial || outputs.errorMessage === "輸入或計算中...";
 
     return (
         <div className="space-y-8">

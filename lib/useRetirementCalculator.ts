@@ -181,10 +181,8 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
 
         // 租金收入：只有在退休年齡 >= 開始出租年齡時才計入
         const nRentAge = clean(inputs.rentAge);
-        let includesRentIncome = false;
         if (inputs.reMode === 'rent' && nRentAge > 0 && nRetireAge >= nRentAge) {
             annualFixedIncome += rentNetMonthly * 12;
-            includesRentIncome = true;
         }
 
         const netExpenseFirstYear = Math.max(0, annualExpense - annualFixedIncome);
@@ -300,11 +298,10 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
 
         // 11. 生成圖表數據 (逐年資產與支出)
         const chartData: YearlyData[] = [];
-        let currentAssets = calculatedAssets; // 從退休時的資產開始
+        const currentAssets = calculatedAssets; // 從退休時的資產開始
         
         for (let i = 0; i <= yearsInRetire; i++) {
             const currentAge = nRetireAge + i;
-            const yearsSinceRetirement = i;
             
             // 計算當年的固定收入（考慮租金開始年齡）
             let yearlyFixedIncome = postFixedIncome * 12;
@@ -318,9 +315,6 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
                 // 最後10年加成
                 yearlyExpense = annualExpense * (1 + medBoost);
             }
-            
-            // 當年淨支出 = 總支出 - 固定收入
-            const yearlyNetExpense = Math.max(0, yearlyExpense - yearlyFixedIncome);
             
             // 累計淨支出（從退休開始到當年）
             let cumulativeExpenses = 0;
@@ -352,7 +346,7 @@ export function useRetirementCalculator(inputs: CalculatorInputs): CalculatorOut
             
             chartData.push({
                 age: currentAge,
-                year: yearsSinceRetirement,
+                year: i,
                 assets: remainingAssets,
                 expenses: cumulativeExpenses
             });

@@ -44,6 +44,7 @@ export function useFieldValidation(inputs: CalculatorInputs) {
         validateSingleField(key);
       }
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inputs]); // 移除 validateSingleField 和 errors 避免無限循環
 
   // 清除特定欄位的錯誤
